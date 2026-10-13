@@ -66,12 +66,12 @@ class PeerProcess:
         self.logger = peerLogger(self.peerID)
 
         # Make subdirectory for peer
-        self.directory = f"log_peer_{peerID}"
+        self.directory = f"peer_{peerID}"
         os.makedirs(self.directory, exist_ok=True)
 
         # Bitfield Setup
-        self.fileSize = self.selfInfo["FileSize"]
-        self.pieceSize = self.selfInfo["PieceSize"]
+        self.fileSize = int(self.commonConfig["FileSize"])
+        self.pieceSize = int(self.commonConfig["PieceSize"])
         self.pieceCount = math.ceil(self.fileSize / self.pieceSize)
         # TODO: Figure out what's sent to bitfield.py, and what's done here
         '''
@@ -95,7 +95,7 @@ class PeerProcess:
             # Uses textbook exampleon page 156, and geeksforgeeks for python translation
             # https://www.geeksforgeeks.org/python/socket-programming-multi-threading-python/
             mySocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            mySocket.connect((self.selfInfo["hostname"], self.selfInfo["port"]))
+            mySocket.bind((self.selfInfo["hostname"], self.selfInfo["port"]))
             mySocket.listen()
 
             while True:
@@ -103,7 +103,7 @@ class PeerProcess:
                 start_new_thread(self.incomingConnection, (clientSocket,))
 
         # starts a new thread for each client. Use _threat built in feature
-        start_new_thread(listenerThread(), ())
+        start_new_thread(listenerThread, ())
 
     def incomingConnection(self, clientSocket):
         # TODO: listener thread will call, handle logic here
