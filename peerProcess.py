@@ -3,7 +3,6 @@ import os
 import time
 import datetime
 import socket
-import threading
 from _thread import start_new_thread
 
 import messages
@@ -82,7 +81,7 @@ class PeerProcess:
         if self.selfInfo["hasFile"] == 1:
             for i in range(self.pieceCount):
                 byteIndex = i // 8
-                bitIndex = 7 - (i% 8) #left to right start w/ higher bits
+                bitIndex = 7 - (i % 8) #left to right start w/ higher bits
                 self.bitfield[byteIndex] |= (1 << bitIndex)
 
 
@@ -94,6 +93,17 @@ class PeerProcess:
         self.startListener()
         self.connectPrevPeers()
 
+        # TODO: Logic to end process. temp for testing
+    def run(self):
+        try:
+            while not self.isFinished():
+                time.sleep(1)
+        except Exception as e:
+            return
+
+    def isFinished(self):
+        return False
+
     def startListener(self):
         # Chapter 3 (Page 194) Recommends threading for socket connections.
         # tldr, Use 1 process, create a new thread with a new connection socket for each client connection
@@ -104,6 +114,9 @@ class PeerProcess:
             mySocket.bind((self.selfInfo["hostname"], self.selfInfo["port"]))
             mySocket.listen()
 
+            # TODO: Remove test thread log
+            self.logger.log(f"Temp test in thread to listen")
+
             while True:
                 clientSocket, address = mySocket.accept()
                 start_new_thread(self.incomingConnection, (clientSocket,))
@@ -112,8 +125,24 @@ class PeerProcess:
         start_new_thread(listenerThread, ())
 
     def incomingConnection(self, clientSocket):
-        # TODO: listener thread will call, handle logic here
-        return
+        try:
+            # The length of the handshake message is 32 bytes.
+            rawHandshakeBytes = clientSocket.recv(32)
+            recvPeerID = messages.parse_handshake_message(rawHandshakeBytes)
+
+            # TODO: Error handling. Specific to failed peerID
+
+            # TODO: Log connection
+            self.logger.log(f"Temp test in incomingConnection")
+
+
+            # sendall(bytes[, flags]) notation: https://docs.python.org/3/library/socket.html
+            clientSocket.sendall(messages.create_handshake_message(self.peerID))
+            clientSocket.sendall(messages.create_bitfield_message(bytes(self.bitfield)))
+            start_new_thread(self.messageExchange, (recvPeerID, clientSocket))
+        except Exception as e:
+            print("Error handling an incoming connection: {e}")
+            clientSocket.close()
 
     def connectPrevPeers(self):
         # Check the list of active peers. If existed beforehand, make a connection
@@ -124,13 +153,21 @@ class PeerProcess:
                         mySocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                         mySocket.connect((info["hostname"], info["port"]))
 
-                        # TODO: Handshake
-
                         # TODO: Log connection
+                        self.logger.log(f"Temp test in connectPrevPeers")
 
-                        # TODO: Message exchange thread. peer-peer messages
+                        # The length of the handshake message is 32 bytes.
+                        mySocket.sendall(messages.create_handshake_message(self.peerID))
+                        recvHandshakeBytes = mySocket.recv(32)
+                        recvPeerID = messages.parse_handshake_message(recvHandshakeBytes)
+
+                        # sanity check: correct peerID, don't send incorrect info to client
+                        if recvPeerID != peerID:
+                            mySocket.close()
+                            break
+
+                        mySocket.sendall(messages.create_bitfield_message(bytes(self.bitfield)))
                         start_new_thread(self.messageExchange, (peerID, mySocket))
-
                         break
                     except socket.error:
                         time.sleep(1)
@@ -147,3 +184,4 @@ if __name__ == "__main__":
 
     peerID = int(sys.argv[1])
     process = PeerProcess(peerID)
+    process.run() # stop first process from closing immediately
