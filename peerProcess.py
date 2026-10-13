@@ -73,12 +73,18 @@ class PeerProcess:
         self.fileSize = int(self.commonConfig["FileSize"])
         self.pieceSize = int(self.commonConfig["PieceSize"])
         self.pieceCount = math.ceil(self.fileSize / self.pieceSize)
-        # TODO: Figure out what's sent to bitfield.py, and what's done here
-        '''
-        if (self.selfInfo["hasFile"] == 1):
-            self.bitfield =
-        else :
-        '''
+
+        numBytes = math.ceil(self.pieceCount / 8)
+        self.bitfield = bytearray(numBytes)
+
+        # Ref: set a bit in a bytearray: #2, https://www.geeksforgeeks.org/python/bitwise-algorithm-in-python/
+
+        if self.selfInfo["hasFile"] == 1:
+            for i in range(self.pieceCount):
+                byteIndex = i // 8
+                bitIndex = 7 - (i% 8) #left to right start w/ higher bits
+                self.bitfield[byteIndex] |= (1 << bitIndex)
+
 
         # TODO: Remove placeholder log test once other logs are setup
         self.logger.log(f"Peer test init. peer {peerID}. TESTING REMOVE")
@@ -113,18 +119,22 @@ class PeerProcess:
         # Check the list of active peers. If existed beforehand, make a connection
         for peerID, info in self.peerInfo.items():
             if peerID < self.peerID:
-                while True:
-                    # TODO: Error handling. Prob try loop everything in the 'while True'
+                while True: # TODO: better way to end conneciton attempts. Likely result in infinite checks w. 1 second delays
+                    try:
+                        mySocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                        mySocket.connect((info["hostname"], info["port"]))
 
-                    mySocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                    mySocket.connect((info["hostname"], info["port"]))
+                        # TODO: Handshake
 
-                    # TODO: Handshake
+                        # TODO: Log connection
 
-                    # TODO: Log connection
+                        # TODO: Message exchange thread. peer-peer messages
+                        start_new_thread(self.messageExchange, (peerID, mySocket))
 
-                    # TODO: Message exchange thread. peer-peer messages
-                    start_new_thread(self.messageExchange, (peerID, mySocket))
+                        break
+                    except socket.error:
+                        time.sleep(1)
+
 
     def messageExchange(self, peerID, clientSocket):
         # TODO: message exchange after thread created to exchange between peers
