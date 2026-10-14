@@ -1,11 +1,11 @@
 import sys
 import os
 import time
-import datetime
 import socket
 from _thread import start_new_thread
 
 import messages
+from logger import Logger
 
 # remove if bitfield stuff is removed from init
 import math
@@ -41,15 +41,6 @@ def loadPeerInfo(selfID, filepath="PeerInfo.cfg"):
                 return "-1", "-1"
     return selfInfo, peers
 
-class peerLogger:
-    def __init__(self, peerID):
-        self.logFilename = f"log_peer_{peerID}.log"
-
-    def log(self, msg):
-        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        with open(self.logFilename, "a") as f:
-            f.write(f"{timestamp}: {msg}\n")
-
 class PeerProcess:
     def __init__(self, peerID):
         # setup peer and read config files
@@ -62,7 +53,8 @@ class PeerProcess:
             sys.exit(1)
 
         # Use peerLogger class to init log file and log messages
-        self.logger = peerLogger(self.peerID)
+        # TODO update logger calls
+        self.logger = Logger(self.peerID)
 
         # Make subdirectory for peer
         self.directory = f"peer_{peerID}"
@@ -77,25 +69,24 @@ class PeerProcess:
         self.bitfield = bytearray(numBytes)
 
         # Ref: set a bit in a bytearray: #2, https://www.geeksforgeeks.org/python/bitwise-algorithm-in-python/
-
         if self.selfInfo["hasFile"] == 1:
             for i in range(self.pieceCount):
                 byteIndex = i // 8
                 bitIndex = 7 - (i % 8) #left to right start w/ higher bits
                 self.bitfield[byteIndex] |= (1 << bitIndex)
 
-
-        # TODO: Remove placeholder log test once other logs are setup
-        self.logger.log(f"Peer test init. peer {peerID}. TESTING REMOVE")
+        # track peer activity
+        self.neighborBitfields = {}
+        self.peerInterested = {}
 
         # TCP client/socket connections
-        # track active connections, start listener, connect to existing peers
         self.startListener()
         self.connectPrevPeers()
 
-        # TODO: Logic to end process. temp for testing
+    # TODO: Logic to end process. temp for testing
     def run(self):
         try:
+            # TODO: Peers only disconnect once every peer has all the files. Fix MUCH later
             while not self.isFinished():
                 time.sleep(1)
         except Exception as e:
@@ -103,6 +94,31 @@ class PeerProcess:
 
     def isFinished(self):
         return False
+
+    def evaluateInterest(self, peerID):
+        if peerID not in self.neighborBitfields:
+            return False
+
+        neighborField = self.neighborBitfields[peerID]
+
+        # check each bit in bitfield to see if neighbor has something we dont
+        for i in range(self.pieceCount):
+            byteIndex = i // 8
+            bitIndex = 7 - (i % 8)
+
+            # check for index limit
+            if byteIndex >= len(neighborField) or byteIndex >= len(self.bitfield):
+                continue
+
+            # check who has each bit
+            neighborByte = (neighborField[byteIndex] >> bitIndex) & 1
+            selfByte = (self.bitfield[byteIndex] >> bitIndex) & 1
+
+            # if we dont have a bit but the neightbor does, record them
+            if neighborByte and not selfByte:
+                return True
+        return False
+
 
     def startListener(self):
         # Chapter 3 (Page 194) Recommends threading for socket connections.
@@ -113,9 +129,6 @@ class PeerProcess:
             mySocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             mySocket.bind((self.selfInfo["hostname"], self.selfInfo["port"]))
             mySocket.listen()
-
-            # TODO: Remove test thread log
-            self.logger.log(f"Temp test in thread to listen")
 
             while True:
                 clientSocket, address = mySocket.accept()
@@ -132,16 +145,20 @@ class PeerProcess:
 
             # TODO: Error handling. Specific to failed peerID
 
-            # TODO: Log connection
-            self.logger.log(f"Temp test in incomingConnection")
-
+            self.logger.log_connection_received(recvPeerID)
 
             # sendall(bytes[, flags]) notation: https://docs.python.org/3/library/socket.html
             clientSocket.sendall(messages.create_handshake_message(self.peerID))
+
+            # TODO: Check handshake works. Temp check for message not being empty (that may be enough tbh)
+            if len(self.bitfield) == 0:
+                clientSocket.close()
+                return
+
             clientSocket.sendall(messages.create_bitfield_message(bytes(self.bitfield)))
             start_new_thread(self.messageExchange, (recvPeerID, clientSocket))
         except Exception as e:
-            print("Error handling an incoming connection: {e}")
+            print(f"Error handling an incoming connection: {e}")
             clientSocket.close()
 
     def connectPrevPeers(self):
@@ -153,8 +170,7 @@ class PeerProcess:
                         mySocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                         mySocket.connect((info["hostname"], info["port"]))
 
-                        # TODO: Log connection
-                        self.logger.log(f"Temp test in connectPrevPeers")
+                        self.logger.log_connection_made(peerID)
 
                         # The length of the handshake message is 32 bytes.
                         mySocket.sendall(messages.create_handshake_message(self.peerID))
@@ -174,7 +190,54 @@ class PeerProcess:
 
 
     def messageExchange(self, peerID, clientSocket):
-        # TODO: message exchange after thread created to exchange between peers
+        try:
+            while True:
+                # TODO: REMOVE TEMP TEST MESSAGE
+                print(f"Peer {self.peerID} waiting for a message from {peerID}")
+
+                type, payload = messages.read_message(clientSocket)
+
+                # TODO: REMOVE TEMP TEST MESSAGE
+                print(f"Peer {self.peerID}, Type {type}, Payload {payload if payload else None}")
+
+                if type is None:
+                    break
+
+                # TODO: Finish cases for each message type
+                match type:
+                    case messages.Choke:
+                        pass
+                    case messages.Unchoke:
+                        pass
+                    case messages.Interested:
+                        self.logger.log_interested_message(peerID)
+                        pass
+                    case messages.NotInterested:
+                        self.logger.log_not_interested_message(peerID)
+                        pass
+                    case messages.Have:
+                        pass
+                    case messages.Bitfield:
+                        self.neighborBitfields[peerID] = bytearray(payload)
+
+                        if self.evaluateInterest(peerID):
+                            self.peerInterested[peerID] = True
+                            clientSocket.sendall(messages.create_interested_message())
+                        else:
+                            self.peerInterested[peerID] = False
+                            clientSocket.sendall(messages.create_not_interested_message())
+
+                    case messages.Request:
+                        pass
+                    case messages.Piece:
+                        pass
+                    case _:
+                        print(f"Warning, message type not found, peerID: {peerID}, clientSocket: {clientSocket}")
+                        pass
+        except Exception as e:
+            print(f"Warning, error in message exchange, peerID: {peerID}, clientSocket: {clientSocket}, exception: {e}")
+        finally:
+            clientSocket.close()
         return
 
 if __name__ == "__main__":

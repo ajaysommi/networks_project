@@ -1,7 +1,7 @@
 import os
 import time, datetime
 
-class logger:
+class Logger:
     def __init__(self, peer_id):
         self.peer_id = peer_id
         self.log_file_path = f"log_peer_{peer_id}.log"

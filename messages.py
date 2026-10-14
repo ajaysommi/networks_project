@@ -137,3 +137,30 @@ def create_piece_message(pieceIndex, pieceContent):
     message = messageLengthBytes + messageTypeBytes + pieceIndexBytes + pieceContent
 
     return message
+
+def read_message(recvSocket):
+    try:
+        # Get header of message length
+        numBytes = recvSocket.recv(4)
+
+        # Sanity check. Can read message length
+        if len(numBytes) < 4:
+            return None, None
+
+        # Message interpreting: https://www.geeksforgeeks.org/python/to-bytes-in-python/
+        # bytearray reference: https://www.geeksforgeeks.org/python/python-bytearray-function/
+        length = int.from_bytes(numBytes, 'big')
+
+        data = bytearray()
+        while len(data) < (length - 1):
+            packet = recvSocket.recv(length - 1 - len(data))
+            if not packet:
+                return None, None
+            data.extend(packet)
+
+        type = data[0]
+        payload = bytes(data[1:])
+
+        return type, payload
+    except Exception:
+        return None, None
