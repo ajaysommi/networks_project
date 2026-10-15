@@ -3,7 +3,7 @@ import os
 import time
 import socket
 from _thread import start_new_thread
-
+import random
 import messages
 from logger import Logger
 
@@ -78,6 +78,9 @@ class PeerProcess:
         # track peer activity
         self.neighborBitfields = {}
         self.peerInterested = {}
+        self.neighborSockets = {}
+        # TODO: TEMP to communicate
+        self.chokedByNeighbor = {}
 
         # TCP client/socket connections
         self.startListener()
@@ -155,6 +158,7 @@ class PeerProcess:
                 clientSocket.close()
                 return
 
+            self.neighborSockets[recvPeerID] = clientSocket
             clientSocket.sendall(messages.create_bitfield_message(bytes(self.bitfield)))
             start_new_thread(self.messageExchange, (recvPeerID, clientSocket))
         except Exception as e:
@@ -182,12 +186,34 @@ class PeerProcess:
                             mySocket.close()
                             break
 
+                        self.neighborSockets[recvPeerID] = mySocket
                         mySocket.sendall(messages.create_bitfield_message(bytes(self.bitfield)))
                         start_new_thread(self.messageExchange, (peerID, mySocket))
                         break
                     except socket.error:
                         time.sleep(1)
 
+    # Helper function to select a random piece to request
+    def requestMissingPiece(self, peerID):
+        if peerID not in self.neighborBitfields:
+            return None
+
+        neighborField = self.neighborBitfields[peerID]
+        available = []
+
+        for i in range(self.pieceCount):
+            byteIndex = i // 8
+            bitIndex = 7 - (i % 8)
+
+            neighborByte = (neighborField[byteIndex] >> bitIndex) & 1
+            selfByte = (self.bitfield[byteIndex] >> bitIndex) & 1
+
+            if neighborByte and not selfByte:
+                available.append(i)
+
+        if not available:
+                return None
+        return random.choice(available)
 
     def messageExchange(self, peerID, clientSocket):
         try:
@@ -206,17 +232,51 @@ class PeerProcess:
                 # TODO: Finish cases for each message type
                 match type:
                     case messages.Choke:
-                        pass
+                        self.logger.log_choking(peerID)
+                        self.peerInterested[peerID] = False
                     case messages.Unchoke:
-                        pass
+                        self.logger.log_unchoking(peerID)
+
+                        # TODO: TEMP to test message exchange
+                        self.chokedByNeighbor[peerID] = False
+
+                        piece = self.requestMissingPiece(peerID)
+                        if piece is not None:
+                            clientSocket.sendall(messages.create_request_message(piece))
                     case messages.Interested:
                         self.logger.log_interested_message(peerID)
-                        pass
+                        self.peerInterested[peerID] = True
+
+                        # TODO: TEMP to test message exchange
+                        for loopID, loopSocket in self.neighborSockets.items():
+                            loopSocket.sendall(messages.create_unchoke_message())
                     case messages.NotInterested:
                         self.logger.log_not_interested_message(peerID)
-                        pass
+                        self.peerInterested[peerID] = False
                     case messages.Have:
-                        pass
+                        pieceIndex = int.from_bytes(payload, 'big')
+                        self.logger.log_have_message(peerID, pieceIndex)
+
+                        if peerID not in self.neighborBitfields:
+                            numBytes = math.ceil(self.pieceCount / 8)
+                            self.neighborBitfields[peerID] = bytearray(numBytes)
+
+                        # update what the neighbor has
+                        byteIndex = pieceIndex // 8
+                        bitIndex = 7 - (pieceIndex % 8) #left to right start w/ higher bits
+                        self.neighborBitfields[peerID][byteIndex] |= (1 << bitIndex)
+
+                        # check to update interest in neighbor
+                        if self.evaluateInterest(peerID):
+                            if not self.peerInterested.get(peerID, False):
+                                self.peerInterested[peerID] = True
+                                clientSocket.sendall(messages.create_interested_message())
+                        else:
+                            if self.peerInterested.get(peerID, False):
+                                self.peerInterested[peerID] = False
+                                clientSocket.sendall(messages.create_not_interested_message())
+
+
                     case messages.Bitfield:
                         self.neighborBitfields[peerID] = bytearray(payload)
 
@@ -228,8 +288,24 @@ class PeerProcess:
                             clientSocket.sendall(messages.create_not_interested_message())
 
                     case messages.Request:
-                        pass
+                        # TODO: NOT done, just temp to get some functionality
+
+                        # find and read piece: https://www.geeksforgeeks.org/python/python-os-path-join-method/
+                        index = int.from_bytes(payload, 'big')
+                        size = int(self.commonConfig["PieceSize"])
+                        path = os.path.join(self.directory, self.commonConfig["FileName"])
+
+                        try:
+                            # binary file reading: https://www.geeksforgeeks.org/python/python-seek-function/
+                            with open(path, "rb") as f:
+                                f.seek(index * size)
+                                content = f.read(size)
+                            clientSocket.sendall(messages.create_piece_message(index, content))
+                        except Exception as e:
+                            print(f"Error reading piece {index}, error: {e}")
+
                     case messages.Piece:
+                        # TODO: NOT done, just temp to get some functionality
                         pass
                     case _:
                         print(f"Warning, message type not found, peerID: {peerID}, clientSocket: {clientSocket}")
@@ -237,6 +313,8 @@ class PeerProcess:
         except Exception as e:
             print(f"Warning, error in message exchange, peerID: {peerID}, clientSocket: {clientSocket}, exception: {e}")
         finally:
+            if peerID in self.neighborSockets:
+                del self.neighborSockets[peerID]
             clientSocket.close()
         return
 
