@@ -152,8 +152,8 @@ def read_message(recvSocket):
         length = int.from_bytes(numBytes, 'big')
 
         data = bytearray()
-        while len(data) < (length - 1):
-            packet = recvSocket.recv(length - 1 - len(data))
+        while len(data) < length:
+            packet = recvSocket.recv(length - len(data))
             if not packet:
                 return None, None
             data.extend(packet)
@@ -163,4 +163,5 @@ def read_message(recvSocket):
 
         return type, payload
     except Exception:
+        print(f"DEBUG EXCEPTION IN read_message: {e}")
         return None, None
